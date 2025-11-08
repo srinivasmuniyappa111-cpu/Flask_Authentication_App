@@ -225,7 +225,7 @@ jobs:
             
             # Create app directory structure
             echo "📁 Creating app directory..."
-            mkdir -p $APP_DIRcxcxc
+            mkdir -p $APP_DIR
             mkdir -p $APP_DIR/templates
             mkdir -p $APP_DIR/static/files
             cd $APP_DIR
