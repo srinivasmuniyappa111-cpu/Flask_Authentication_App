@@ -209,13 +209,15 @@ jobs:
               
               # Check if venv module is available, install virtualenv as fallback if needed
               echo "🔍 Checking for venv module..."
-              python3 -m venv --help &> /dev/null || true
-              VENV_CHECK=$?
-              if [ $VENV_CHECK -ne 0 ]; then
-                echo "⚠️ venv module not available, installing virtualenv via pip..."
-                sudo pip3 install virtualenv || echo "⚠️ virtualenv installation failed, will try later"
-              else
+              VENV_CHECK=1
+              # Use python3 -c to check if venv module can be imported (more reliable than -m venv --help)
+              python3 -c "import venv" 2>/dev/null && VENV_CHECK=0 || true
+              
+              if [ $VENV_CHECK -eq 0 ]; then
                 echo "✅ venv module is available"
+              else
+                echo "⚠️ venv module not available, installing virtualenv via pip..."
+                sudo pip3 install virtualenv 2>/dev/null || echo "⚠️ virtualenv installation failed, will try later"
               fi
               
               echo "✅ Package installation complete"
