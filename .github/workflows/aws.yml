@@ -9,9 +9,6 @@ on:
       - main
   workflow_dispatch:
 
-permissions:
-  contents: read
-
 jobs:
   ##########################################################
   # 🧹 1. LINT JOB — style + static analysis
@@ -224,7 +221,7 @@ jobs:
   verify:
     name: 🔍 Post-Deploy Verification
     runs-on: ubuntu-latest
-    needs: [deploy]
+    needs: deploy
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
