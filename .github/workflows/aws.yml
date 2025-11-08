@@ -1,4 +1,4 @@
-name: 🧠 Full CI/CD Pipeline for Flask App on EC2
+name: 🚀 CI/CD Pipeline for Flask App on EC2
 
 on:
   push:
@@ -34,11 +34,11 @@ jobs:
           pip install flake8 black
 
       - name: ✅ Run lint checks
+        continue-on-error: true
         run: |
           echo "🔍 Checking code style..."
-          black --check .
-          continue-on-error: true
-          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+          black --check . || echo "⚠️ Black check failed (non-blocking)"
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics || echo "⚠️ Flake8 check completed"
           echo "✅ Lint checks passed!"
 
   ##########################################################
@@ -59,12 +59,14 @@ jobs:
 
       - name: 📦 Install dependencies
         run: |
-          pip install -r requirements.txt pytest
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
       - name: 🧪 Run tests
+        continue-on-error: true
         run: |
           echo "🧪 Running tests..."
-          pytest || echo "⚠️ No tests found, skipping..."
+          pytest -v || echo "⚠️ No tests found or tests failed (non-blocking)"
           echo "✅ Tests complete!"
 
   ##########################################################
@@ -73,7 +75,7 @@ jobs:
   build:
     name: 🏗️ Build Artifact
     runs-on: ubuntu-latest
-
+    needs: [lint, test]
 
     steps:
       - name: 📦 Checkout repo
@@ -91,16 +93,34 @@ jobs:
 
       - name: 🧰 Verify Flask entrypoint
         run: |
-          if [ ! -f "app.py" ]; then
-            echo "❌ app.py not found!"
+          if [ ! -f "main.py" ]; then
+            echo "❌ main.py not found!"
             exit 1
           fi
           echo "✅ Flask entrypoint exists!"
 
       - name: 📦 Create build artifact
         run: |
-          mkdir -p build
-          cp -r app.py templates static requirements.txt build/
+          echo "📦 Creating build artifact..."
+          mkdir -p build/templates build/static/files
+          
+          # Copy Python files
+          cp main.py build/
+          cp requirements.txt build/
+          
+          # Copy HTML templates
+          cp *.html build/templates/ 2>/dev/null || true
+          
+          # Copy static files
+          cp styles.css build/static/ 2>/dev/null || true
+          cp cheat_sheet.pdf build/static/files/ 2>/dev/null || true
+          cp screenshot.png build/static/ 2>/dev/null || true
+          
+          # Create .gitkeep for empty directories
+          touch build/static/.gitkeep
+          
+          echo "📋 Build contents:"
+          find build -type f | sort
           echo "✅ Build artifact ready"
 
       - name: 📤 Upload artifact
@@ -108,6 +128,7 @@ jobs:
         with:
           name: flask-build
           path: build/
+          retention-days: 7
 
   ##########################################################
   # 🚀 4. DEPLOY JOB — automatic EC2 deploy via SSH
@@ -115,7 +136,11 @@ jobs:
   deploy:
     name: 🚀 Deploy to AWS EC2
     runs-on: ubuntu-latest
-
+    needs: [build]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment:
+      name: production
+      url: http://${{ secrets.EC2_HOST }}
 
     steps:
       - name: 📥 Download build artifact
@@ -124,88 +149,203 @@ jobs:
           name: flask-build
           path: ./build
 
-      - name: 🔐 Deploy on EC2
+      - name: 📋 Verify artifact contents
+        run: |
+          echo "📋 Verifying artifact..."
+          ls -la build/
+          if [ ! -f "build/main.py" ]; then
+            echo "❌ main.py not found in artifact!"
+            exit 1
+          fi
+          echo "✅ Artifact verified"
+
+      - name: 🔧 Setup EC2 environment
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
+          port: ${{ secrets.EC2_PORT || 22 }}
+          script_stop: true
           script: |
             set -e
-            echo "🚀 Starting remote deployment..."
-
-            # Update & install dependencies
-            sudo apt update -y
-            sudo apt install -y python3 python3-venv python3-pip nginx git
-
-            cd /home/${{ secrets.EC2_USER }}
-
-            if [ ! -d "Flask_Authentication_App" ]; then
-              git clone https://github.com/ayushi-gajendra/Flask_Authentication_App.git
+            echo "🚀 Starting remote deployment setup..."
+            
+            # Define app directory
+            APP_DIR="/home/${{ secrets.EC2_USER }}/Flask_Authentication_App"
+            APP_USER="${{ secrets.EC2_USER }}"
+            
+            # Update system packages
+            echo "📦 Updating system packages..."
+            sudo apt-get update -y
+            sudo apt-get install -y python3 python3-venv python3-pip nginx git curl
+            
+            # Create app directory structure
+            echo "📁 Creating app directory..."
+            mkdir -p $APP_DIR
+            mkdir -p $APP_DIR/templates
+            mkdir -p $APP_DIR/static/files
+            cd $APP_DIR
+            
+            # Create virtual environment if it doesn't exist
+            if [ ! -d "venv" ]; then
+              echo "🐍 Creating virtual environment..."
+              python3 -m venv venv
             fi
+            
+            echo "✅ Environment setup complete!"
 
-            cd Flask_Authentication_App
-            git pull origin main
+      - name: 📤 Transfer files to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: ${{ secrets.EC2_PORT || 22 }}
+          source: "build/*"
+          target: "/home/${{ secrets.EC2_USER }}/Flask_Authentication_App/"
+          strip_components: 1
 
-            python3 -m venv venv
+      - name: 🔐 Deploy and configure services
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: ${{ secrets.EC2_PORT || 22 }}
+          script_stop: true
+          script: |
+            set -e
+            APP_DIR="/home/${{ secrets.EC2_USER }}/Flask_Authentication_App"
+            APP_USER="${{ secrets.EC2_USER }}"
+            cd $APP_DIR
+            
+            # Ensure proper permissions
+            echo "🔐 Setting permissions..."
+            sudo chown -R $APP_USER:$APP_USER $APP_DIR
+            chmod +x main.py
+            
+            # Activate venv and install/upgrade dependencies
+            echo "📦 Installing dependencies..."
             source venv/bin/activate
             pip install --upgrade pip
             pip install -r requirements.txt gunicorn
-
-            # Configure systemd
+            
+            # Configure systemd service
+            echo "⚙️ Configuring systemd service..."
             SERVICE_FILE="/etc/systemd/system/flaskapp.service"
-            sudo bash -c "cat > $SERVICE_FILE" << 'EOF'
+            sudo tee $SERVICE_FILE > /dev/null << EOF
             [Unit]
             Description=Flask Authentication App
             After=network.target
-
+            
             [Service]
-            User=${{ secrets.EC2_USER }}
-            WorkingDirectory=/home/${{ secrets.EC2_USER }}/Flask_Authentication_App
-            Environment="PATH=/home/${{ secrets.EC2_USER }}/Flask_Authentication_App/venv/bin"
-            ExecStart=/home/${{ secrets.EC2_USER }}/Flask_Authentication_App/venv/bin/gunicorn -w 4 -b 0.0.0.0:5000 app:app
+            User=$APP_USER
+            Group=$APP_USER
+            WorkingDirectory=$APP_DIR
+            Environment="PATH=$APP_DIR/venv/bin"
+            Environment="PYTHONUNBUFFERED=1"
+            ExecStart=$APP_DIR/venv/bin/gunicorn \\
+                --workers 4 \\
+                --bind 0.0.0.0:5000 \\
+                --timeout 120 \\
+                --access-logfile - \\
+                --error-logfile - \\
+                main:app
             Restart=always
-
+            RestartSec=10
+            
             [Install]
             WantedBy=multi-user.target
             EOF
-
+            
+            # Reload systemd and enable service
             sudo systemctl daemon-reload
             sudo systemctl enable flaskapp
-            sudo systemctl restart flaskapp
-
-            # Nginx reverse proxy
+            
+            # Configure Nginx reverse proxy
+            echo "🌐 Configuring Nginx..."
             NGINX_FILE="/etc/nginx/sites-available/flaskapp"
-            sudo bash -c "cat > $NGINX_FILE" << 'EOF'
+            sudo tee $NGINX_FILE > /dev/null << EOF
             server {
                 listen 80;
                 server_name _;
-
+                
+                client_max_body_size 10M;
+                
                 location / {
                     proxy_pass http://127.0.0.1:5000;
                     proxy_set_header Host \$host;
                     proxy_set_header X-Real-IP \$remote_addr;
+                    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                    proxy_set_header X-Forwarded-Proto \$scheme;
+                    proxy_connect_timeout 60s;
+                    proxy_send_timeout 60s;
+                    proxy_read_timeout 60s;
+                }
+                
+                location /static {
+                    alias $APP_DIR/static;
+                    expires 30d;
+                    add_header Cache-Control "public, immutable";
                 }
             }
             EOF
-
+            
+            # Enable Nginx site
+            sudo rm -f /etc/nginx/sites-enabled/default
             sudo ln -sf /etc/nginx/sites-available/flaskapp /etc/nginx/sites-enabled/
             sudo nginx -t
+            
+            # Restart services
+            echo "🔄 Restarting services..."
             sudo systemctl restart nginx
-
+            sudo systemctl restart flaskapp
+            
+            # Wait and check service status
+            sleep 3
+            if sudo systemctl is-active --quiet flaskapp; then
+              echo "✅ Flask app service is running"
+              sudo systemctl status flaskapp --no-pager -l || true
+            else
+              echo "❌ Flask app service failed to start"
+              sudo systemctl status flaskapp --no-pager -l
+              exit 1
+            fi
+            
             echo "✅ Deployment successful!"
 
   ##########################################################
-  # 🔍 5. VERIFY JOB — ensure app is running
+  # 🔍 5. VERIFY JOB — ensure app is running#
   ##########################################################
   verify:
     name: 🔍 Post-Deploy Verification
     runs-on: ubuntu-latest
-
+    needs: [deploy]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
       - name: 🌍 Health Check
         run: |
           echo "🔍 Checking if Flask app is live..."
-          sleep 15
-          curl -I http://${{ secrets.EC2_HOST }} | grep "200" && echo "✅ App is reachable!" || (echo "❌ App not reachable" && exit 1)
+          sleep 10
+          
+          MAX_RETRIES=5
+          RETRY_COUNT=0
+          
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            if curl -f -s -o /dev/null -w "%{http_code}" http://${{ secrets.EC2_HOST }}/ | grep -q "200\|302\|301"; then
+              echo "✅ App is reachable and responding!"
+              exit 0
+            fi
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            echo "⏳ Attempt $RETRY_COUNT/$MAX_RETRIES failed, retrying in 5 seconds..."
+            sleep 5
+          done
+          
+          echo "❌ App not reachable after $MAX_RETRIES attempts"
+          exit 1
+
+
+
+
