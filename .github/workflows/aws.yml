@@ -257,41 +257,54 @@ jobs:
             echo "✅ Current directory: $(pwd)"
             
             # Create virtual environment if it doesn't exist
+            echo "🔍 Checking for virtual environment..."
             if [ ! -d "venv" ]; then
               echo "🐍 Creating virtual environment..."
-              # Try python3 -m venv first (disable set -e for this section)
+              # Disable exit on error for venv creation
               set +e
+              
+              # Try python3 -m venv first
+              echo "📦 Attempting to create venv with: python3 -m venv venv"
               python3 -m venv venv
               VENV_STATUS=$?
-              set -e
+              echo "📋 venv creation exit status: $VENV_STATUS"
               
-              if [ $VENV_STATUS -eq 0 ]; then
-                echo "✅ Virtual environment created with venv"
+              # Check if venv directory was actually created
+              if [ -d "venv" ] && [ -f "venv/bin/activate" ]; then
+                echo "✅ Virtual environment created successfully with venv"
+                set -e
+              elif [ $VENV_STATUS -eq 0 ]; then
+                echo "✅ Virtual environment created with venv (status OK)"
+                set -e
               else
-                echo "⚠️ venv module not available, trying virtualenv..."
+                echo "⚠️ venv module failed (status: $VENV_STATUS), trying virtualenv..."
                 # Install virtualenv if not available
-                set +e
                 if ! command -v virtualenv &> /dev/null; then
                   echo "📦 Installing virtualenv..."
                   pip3 install --user virtualenv 2>/dev/null || sudo pip3 install virtualenv 2>/dev/null || true
                 fi
-                set -e
                 
                 # Try virtualenv if available
                 if command -v virtualenv &> /dev/null; then
-                  set +e
+                  echo "📦 Attempting to create venv with: virtualenv -p python3 venv"
                   virtualenv -p python3 venv
                   VIRTUALENV_STATUS=$?
-                  set -e
-                  if [ $VIRTUALENV_STATUS -eq 0 ]; then
-                    echo "✅ Virtual environment created with virtualenv"
+                  echo "📋 virtualenv creation exit status: $VIRTUALENV_STATUS"
+                  
+                  if [ -d "venv" ] && [ -f "venv/bin/activate" ]; then
+                    echo "✅ Virtual environment created successfully with virtualenv"
+                    set -e
+                  elif [ $VIRTUALENV_STATUS -eq 0 ]; then
+                    echo "✅ Virtual environment created with virtualenv (status OK)"
+                    set -e
                   else
-                    echo "❌ virtualenv command failed"
-                    exit 1
+                    echo "❌ virtualenv command failed (status: $VIRTUALENV_STATUS)"
+                    echo "⚠️ Continuing anyway - will try to use system Python"
+                    set -e
                   fi
                 else
-                  echo "❌ Failed to create virtual environment - both venv and virtualenv unavailable"
-                  exit 1
+                  echo "⚠️ virtualenv not available, continuing without virtual environment"
+                  set -e
                 fi
               fi
             else
