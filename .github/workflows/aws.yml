@@ -199,16 +199,17 @@ jobs:
               echo "✅ Required packages installation attempted"
               
               # Try to install curl only if not already available
-              if ! command -v curl &> /dev/null; then
+              echo "🔍 Checking for curl..."
+              if command -v curl &> /dev/null; then
+                echo "✅ curl already available"
+              else
                 echo "📦 Attempting to install curl..."
                 sudo dnf install -y curl || echo "⚠️ curl not installed (curl-minimal may be sufficient)"
-              else
-                echo "✅ curl already available"
               fi
               
               # Check if venv module is available, install virtualenv as fallback if needed
               echo "🔍 Checking for venv module..."
-              python3 -m venv --help &> /dev/null
+              python3 -m venv --help &> /dev/null || true
               VENV_CHECK=$?
               if [ $VENV_CHECK -ne 0 ]; then
                 echo "⚠️ venv module not available, installing virtualenv via pip..."
@@ -217,8 +218,6 @@ jobs:
                 echo "✅ venv module is available"
               fi
               
-              # Re-enable exit on error
-              set -e
               echo "✅ Package installation complete"
             elif command -v yum &> /dev/null; then
               # Amazon Linux 1/2 or older RHEL/CentOS (uses yum)
@@ -237,6 +236,10 @@ jobs:
               echo "❌ Unsupported package manager. Please install manually."
               exit 1
             fi
+            
+            # Re-enable exit on error now that package installation is complete
+            set -e
+            echo "🔧 Proceeding to directory setup..."
             
             # Create app directory structure
             echo "📁 Creating app directory..."
