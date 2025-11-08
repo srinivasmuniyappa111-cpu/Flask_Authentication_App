@@ -168,158 +168,35 @@ jobs:
           script_stop: true
           script: |
             set -e
+            trap 'echo "❌ Error on line $LINENO"; exit 1' ERR
             echo "🚀 Starting remote deployment setup..."
             
-            # Define app directory
             APP_DIR="/home/${{ secrets.EC2_USER }}/Flask_Authentication_App"
             APP_USER="${{ secrets.EC2_USER }}"
-            echo "📋 App directory: $APP_DIR"
-            echo "📋 App user: $APP_USER"
-            
-            # Detect OS and update system packages
-            echo "📦 Detecting OS and updating system packages..."
-            if command -v apt-get &> /dev/null; then
-              # Ubuntu/Debian
-              echo "🐧 Detected Debian/Ubuntu system"
-              sudo apt-get update -y
-              sudo apt-get install -y python3 python3-venv python3-pip nginx git curl
-            elif command -v dnf &> /dev/null; then
-              # Amazon Linux 2023/Fedora/newer RHEL (uses dnf)
-              echo "🔴 Detected Amazon Linux 2023/Fedora/RHEL system (dnf)"
-              # Disable exit on error for package installation section
-              set +e
-              
-              echo "🔄 Updating package lists..."
-              sudo dnf update -y || echo "⚠️ dnf update had issues, but continuing..."
-              
-              # Install packages, curl is optional (curl-minimal may already be installed)
-              # Note: python3-venv package doesn't exist on Amazon Linux 2023, venv is included with python3
-              echo "📦 Installing required packages..."
-              sudo dnf install -y python3 python3-pip nginx git || echo "⚠️ Some packages may not have installed, but continuing..."
-              echo "✅ Required packages installation attempted"
-              
-              # Try to install curl only if not already available
-              echo "🔍 Checking for curl..."
-              if command -v curl &> /dev/null; then
-                echo "✅ curl already available"
-              else
-                echo "📦 Attempting to install curl..."
-                sudo dnf install -y curl || echo "⚠️ curl not installed (curl-minimal may be sufficient)"
-              fi
-              
-              # Check if venv module is available, install virtualenv as fallback if needed
-              echo "🔍 Checking for venv module..."
-              VENV_CHECK=1
-              # Use python3 -c to check if venv module can be imported (more reliable than -m venv --help)
-              python3 -c "import venv" 2>/dev/null && VENV_CHECK=0 || true
-              
-              if [ $VENV_CHECK -eq 0 ]; then
-                echo "✅ venv module is available"
-              else
-                echo "⚠️ venv module not available, installing virtualenv via pip..."
-                sudo pip3 install virtualenv 2>/dev/null || echo "⚠️ virtualenv installation failed, will try later"
-              fi
-              
-              echo "✅ Package installation complete"
-            elif command -v yum &> /dev/null; then
-              # Amazon Linux 1/2 or older RHEL/CentOS (uses yum)
-              echo "🔴 Detected Amazon Linux 1/2 or older RHEL/CentOS system (yum)"
-              sudo yum update -y
-              sudo yum install -y python3 python3-pip nginx git || true
-              # Try to install curl only if not already available
-              if ! command -v curl &> /dev/null; then
-                sudo yum install -y curl || echo "⚠️ curl not installed (curl-minimal may be sufficient)"
-              else
-                echo "✅ curl already available"
-              fi
-              # Install venv module separately for Amazon Linux
-              sudo pip3 install virtualenv || true
-            else
-              echo "❌ Unsupported package manager. Please install manually."
-              exit 1
-            fi
-            
-            # Re-enable exit on error now that package installation is complete
-            set -e
-            echo "🔧 Proceeding to directory setup..."
-            
-            # Create app directory structure
-            echo "📁 Creating app directory..."
-            echo "📋 Attempting to create directory: $APP_DIR"
-            # Ensure parent directory exists and has correct permissions
-            sudo mkdir -p $(dirname $APP_DIR) || true
-            sudo mkdir -p $APP_DIR || { echo "❌ Failed to create $APP_DIR"; exit 1; }
-            sudo mkdir -p $APP_DIR/templates || { echo "❌ Failed to create templates directory"; exit 1; }
-            sudo mkdir -p $APP_DIR/static/files || { echo "❌ Failed to create static/files directory"; exit 1; }
-            # Set ownership to the app user
-            sudo chown -R $APP_USER:$APP_USER $APP_DIR || { echo "❌ Failed to set ownership"; exit 1; }
-            cd $APP_DIR || { echo "❌ Failed to cd to $APP_DIR"; exit 1; }
-            echo "✅ Current directory: $(pwd)"
-            
-            # Create virtual environment if it doesn't exist
+
+            echo "📦 Detected Amazon Linux 2023"
+            sudo dnf update -y || true
+            sudo dnf install -y python3 python3-pip nginx git || true
+
+            echo "🔍 Checking Python venv availability..."
+            python3 -c "import venv" && echo "✅ venv available" || (echo "⚠️ Installing virtualenv fallback..." && sudo pip3 install virtualenv)
+
+            echo "📁 Preparing app directory..."
+            sudo mkdir -p $APP_DIR/{templates,static/files}
+            sudo chown -R $APP_USER:$APP_USER $APP_DIR
+            cd $APP_DIR
+
             echo "🔍 Checking for virtual environment..."
-            echo "📋 Current working directory: $(pwd)"
-            echo "📋 Checking if venv directory exists..."
-            set +e
-            [ -d "venv" ]
-            VENV_EXISTS=$?
-            set -e
-            echo "📋 venv directory check result: $VENV_EXISTS (0=exists, 1=not exists)"
-            
-            if [ $VENV_EXISTS -ne 0 ]; then
-              echo "🐍 Creating virtual environment..."
-              # Disable exit on error for venv creation
-              set +e
-              
-              # Try python3 -m venv first
-              echo "📦 Attempting to create venv with: python3 -m venv venv"
-              python3 -m venv venv
-              VENV_STATUS=$?
-              echo "📋 venv creation exit status: $VENV_STATUS"
-              
-              # Check if venv directory was actually created
-              if [ -d "venv" ] && [ -f "venv/bin/activate" ]; then
-                echo "✅ Virtual environment created successfully with venv"
-                set -e
-              elif [ $VENV_STATUS -eq 0 ]; then
-                echo "✅ Virtual environment created with venv (status OK)"
-                set -e
-              else
-                echo "⚠️ venv module failed (status: $VENV_STATUS), trying virtualenv..."
-                # Install virtualenv if not available
-                if ! command -v virtualenv &> /dev/null; then
-                  echo "📦 Installing virtualenv..."
-                  pip3 install --user virtualenv 2>/dev/null || sudo pip3 install virtualenv 2>/dev/null || true
-                fi
-                
-                # Try virtualenv if available
-                if command -v virtualenv &> /dev/null; then
-                  echo "📦 Attempting to create venv with: virtualenv -p python3 venv"
-                  virtualenv -p python3 venv
-                  VIRTUALENV_STATUS=$?
-                  echo "📋 virtualenv creation exit status: $VIRTUALENV_STATUS"
-                  
-                  if [ -d "venv" ] && [ -f "venv/bin/activate" ]; then
-                    echo "✅ Virtual environment created successfully with virtualenv"
-                    set -e
-                  elif [ $VIRTUALENV_STATUS -eq 0 ]; then
-                    echo "✅ Virtual environment created with virtualenv (status OK)"
-                    set -e
-                  else
-                    echo "❌ virtualenv command failed (status: $VIRTUALENV_STATUS)"
-                    echo "⚠️ Continuing anyway - will try to use system Python"
-                    set -e
-                  fi
-                else
-                  echo "⚠️ virtualenv not available, continuing without virtual environment"
-                  set -e
-                fi
-              fi
-            else
+            if [ -d "venv" ]; then
               echo "✅ Virtual environment already exists"
+            else
+              echo "🐍 Creating new virtual environment..."
+              python3 -m venv venv || (echo "⚠️ venv failed, trying virtualenv..." && virtualenv -p python3 venv)
+              echo "✅ Virtual environment created"
             fi
-            
+
             echo "✅ Environment setup complete!"
+
 
       - name: 📤 Transfer files to EC2
         uses: appleboy/scp-action@v0.1.7
